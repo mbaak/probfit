@@ -755,7 +755,8 @@ cdef class BinnedChi2:
     cdef int nint_subdiv
     def __init__(self, f, data, bins=40, weights=None, bound=None,
                  sumw2=False, nint_subdiv=1,
-                 data_binned=False, bin_contents=None, bin_edges=None):
+                 data_binned=False, bin_contents=None, bin_edges=None,
+                 sigma=None):
         """
         Create Binned Chi2 Object. It calculates chi^2 assuming poisson
         statistics.
@@ -796,6 +797,10 @@ cdef class BinnedChi2:
               expect number of event in each bin. The number represent the
               number of subdivisions in each bin to do simpson3/8.
               Default 1.
+
+            - **sigma**
+              1D array like the histogram entries.
+              When set these are the bin errors used in the chi2 calculation.
         """
 
         self.f = f
@@ -839,6 +844,9 @@ cdef class BinnedChi2:
                 sw2 = self.h * weights
                 self.err = np.sqrt(sw2)
 
+        elif sigma is not None:
+            assert isinstance(sigma, (list, tuple, np.ndarray)) and len(sigma)==len(self.h)
+            self.err = np.array(sigma)
         else:
             self.err = np.sqrt(self.h)
             # closer poisson approximation for empty bins
