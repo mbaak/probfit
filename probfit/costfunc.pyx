@@ -841,6 +841,8 @@ cdef class BinnedChi2:
 
         else:
             self.err = np.sqrt(self.h)
+            # closer poisson approximation for empty bins
+            self.err[self.err < 1.] = 1.
 
         #check if error is too small
         if np.any(self.err < 1e-5):
