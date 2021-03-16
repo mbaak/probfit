@@ -70,7 +70,7 @@ cpdef double integrate1d(f, tuple bound, int nint, tuple arg=None) except*:
 cpdef double xlogyx(double x,double y):
     cdef double ret
     if x<1e-100:
-        warn(LogWarning('x is really small return 0'))
+        # warn(LogWarning('x is really small return 0'))
         return 0.
     if x<y:
         ret = x*log1p((y-x)/x)
@@ -82,7 +82,7 @@ cpdef double xlogyx(double x,double y):
 #compute w*log(y/x) where w < x and goes to zero faster than x
 cpdef double wlogyx(double w,double y, double x):
     if x<1e-100:
-        warn(LogWarning('x is really small return 0'))
+        # warn(LogWarning('x is really small return 0'))
         return 0.
     if x<y:
         ret = w*log1p((y-x)/x)
