@@ -160,12 +160,20 @@ class TrueLabel(object):
             raise RuntimeError('state probabilities cannot be normalized')
         self.state_probabilities = cprobs / pnorm
 
+    def set_state_probabilities(self, probabilities):
+        if len(state_probabilities) == self.cardinality:
+            self.independent_probabilities = np.array(probabilities)[:-1]
+        elif len(state_probabilities) == self.cardinality - 1:
+            self.independent_probabilities = np.array(probabilities)
+        self._update_state_probabilities()
+
     def __call__(self, *args):
+        # does not take X only parameters, b/c independent of X
         if len(args) == self.cardinality - 1:
             self.independent_probabilities = np.array(args[0: self.cardinality - 1])
             self._update_state_probabilities()
         elif len(args) == 1:
-            iprobs = args[1]
+            iprobs = args[0]
             if isinstance(iprobs, (list, tuple, np.ndarray)):
                 self.independent_probabilities = np.array(iprobs).ravel()
                 if len(self.independent_probabilities) != self.cardinality - 1:
@@ -174,6 +182,12 @@ class TrueLabel(object):
 
         # return all state probabilities
         return self.state_probabilities
+
+    def sample(self, size=1, seed=None):
+        if seed is not None:
+            np.random.seed(seed)
+        states = range(self.cardinality)
+        return np.random.choice(states, size=size, p=self.state_probabilities)
 
 
 class BayesianModel(object):
@@ -184,9 +198,9 @@ class BayesianModel(object):
         if len(weak_labels) == 0 or not all([isinstance(c, Node) for c in weak_labels]):
             raise TypeError('weak_labels attribute should be filled list of weak_labels')
 
-        indices = np.concatenate([c.indices for c in weak_labels])
-        u_indices = np.unique(indices)
-        if len(indices) != len(u_indices):
+        self.indices = np.concatenate([c.indices for c in weak_labels])
+        u_indices = np.unique(self.indices)
+        if len(self.indices) != len(u_indices):
             raise RuntimeError('overlapping indices between weak_labels. weak_labels are not independent.')
 
         cardinalities = [wl.cardinality for wl in weak_labels]
@@ -194,12 +208,13 @@ class BayesianModel(object):
         if not cardinalities.count(self.cardinality) == len(cardinalities):
             raise RuntimeError('weak_labels and true_label should all have the same cardinality')
         self.classes = np.array(list(range(self.cardinality)))
+        self.nodes = weak_labels
 
         # define true label (class imbalance parameters)
-        true_label = TrueLabel(self.cardinality, prefix)
+        self.true_label = TrueLabel(self.cardinality, prefix)
 
         # set function code
-        arg = tuple(weak_labels) + (true_label, )
+        arg = tuple(weak_labels) + (self.true_label, )
         self.func_code, allpos = merge_func_code(*arg)
 
         # store functions & caching
@@ -311,6 +326,33 @@ class BayesianModel(object):
         # per class probability
         proba = prob_class / (prob_sum[:, np.newaxis] if is_array else prob_sum)
         return proba
+
+    def sample(self, size=1, seed=None, include_true_label=False):
+        """
+        :param size:
+        :return:
+        """
+        if seed is not None:
+            np.random.seed(seed)
+
+        true_indices = [self.true_label.prefix] if include_true_label else []
+        all_indices = np.concatenate([self.indices, true_indices])
+
+        types = [(var_name, "int") for var_name in all_indices]
+        X = np.zeros(size, dtype=types).view(np.recarray)
+
+        Y = self.true_label.sample(size=size)
+        if include_true_label:
+            X[true_indices] = Y
+        unique_y, counts = np.unique(Y, return_counts=True, axis=0)
+
+        for node in self.nodes:
+            samples = np.zeros(size, dtype=int)
+            for i, sizey in enumerate(counts):
+                samples[(Y == unique_y[i]).all(axis=1)] = \
+                    np.random.choice(node.states, size=sizey, p=unique_y[i])
+            X[node.indices] = samples
+        return X
 
 
 class BinnedLabels(object):
