@@ -405,6 +405,9 @@ class BinnedLH(object):
         self.arglen = len(varnames)
         self.parameter_names = varnames
 
+    def default_errordef(self):
+        return 0.5
+
     def __call__(self, *arg):
         if self.arglen != len(arg):
             raise RuntimeError('wrong number of arguments')
