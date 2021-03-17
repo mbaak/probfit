@@ -14,7 +14,7 @@ def tuplize(x):
 
 
 class Node(object):
-    def __init__(self, indices, states, cardinality, prefix='wl'):
+    def __init__(self, indices, states, rank, prefix='wl'):
         """
 
         :param indices:
@@ -22,8 +22,8 @@ class Node(object):
         # basic checks on inputs
         if not isinstance(prefix, str) or len(prefix) == 0:
             raise ValueError('prefix should be a filled string')
-        if not isinstance(cardinality, int) or cardinality < 0:
-            raise ValueError('cardinality should be a positive integer')
+        if not isinstance(rank, int) or rank < 0:
+            raise ValueError('rank should be a positive integer')
         if isinstance(states, int) and states > 0:
             states = list(range(states))
         if not isinstance(states, (list, tuple, np.ndarray)) or len(states) == 0:
@@ -42,15 +42,15 @@ class Node(object):
         self.states = states
         self.n_states = len(states)
         self.mapping = dict(zip(states, range(self.n_states)))
-        self.cardinality = cardinality
-        self.shape = (self.n_states - 1, self.cardinality)
-        self.n_independent = (self.n_states - 1) * self.cardinality
+        self.rank = rank
+        self.shape = (self.n_states - 1, self.rank)
+        self.n_independent = (self.n_states - 1) * self.rank
         self.independent_probabilities = np.ones(self.n_independent)
         self._update_conditional_probabilities()
 
         # Leave out last probabilities, can also handle tuples of states
         states_str = [[str(s) for s in tuplize(state)] for state in states[:-1]]
-        varnames = ['X'] + [f'{self.name}_{"_".join(state)}_{y}' for state in states_str for y in range(cardinality)]
+        varnames = ['X'] + [f'{self.name}_{"_".join(state)}_{y}' for state in states_str for y in range(rank)]
         self.func_code = make_func_code(varnames)
         self.func_defaults = None
 
@@ -105,10 +105,10 @@ class Node(object):
 
 
 class WeakLabel(Node):
-    def __init__(self, index, states, cardinality, prefix='wl'):
+    def __init__(self, index, states, rank, prefix='wl'):
         if not isinstance(index, int) or index < 0:
             raise ValueError('index should be a positive integer')
-        super(WeakLabel, self).__init__([index], states, cardinality, prefix)
+        super(WeakLabel, self).__init__([index], states, rank, prefix)
 
 
 class CompoundWeakLabel(Node):
@@ -116,9 +116,9 @@ class CompoundWeakLabel(Node):
         if len(nodes) == 0 or not all([isinstance(node, Node) for node in nodes]):
             raise TypeError('weak labels should be filled list of WeakLabels')
 
-        cardinalities = [node.cardinality for node in nodes]
-        if not cardinalities.count(cardinalities[0]) == len(cardinalities):
-            raise RuntimeError('weak labels should have the same cardinality')
+        ranks = [node.rank for node in nodes]
+        if not ranks.count(ranks[0]) == len(ranks):
+            raise RuntimeError('weak labels should have the same rank')
 
         indices = np.concatenate([node.indices for node in nodes])
 
@@ -128,24 +128,24 @@ class CompoundWeakLabel(Node):
         for node in nodes:
             states = outer(states, node.states)
 
-        super(CompoundWeakLabel, self).__init__(indices, states, cardinalities[0], prefix)
+        super(CompoundWeakLabel, self).__init__(indices, states, ranks[0], prefix)
 
 
 class TrueLabel(object):
-    def __init__(self, cardinality, prefix='pY'):
+    def __init__(self, rank, prefix='pY'):
         # basic checks on inputs
         if not isinstance(prefix, str) or len(prefix) == 0:
             raise ValueError('prefix should be a filled string')
         self.prefix = prefix
-        if not isinstance(cardinality, int) or cardinality < 0:
-            raise ValueError('cardinality should be a positive integer')
-        self.cardinality = cardinality
+        if not isinstance(rank, int) or rank < 0:
+            raise ValueError('rank should be a positive integer')
+        self.rank = rank
 
-        self.independent_probabilities = np.ones(self.cardinality - 1)
+        self.independent_probabilities = np.ones(self.rank - 1)
         self._update_state_probabilities()
 
         # set function code for bayesian model
-        varnames = [f'{self.prefix}_{y}' for y in range(self.cardinality - 1)]
+        varnames = [f'{self.prefix}_{y}' for y in range(self.rank - 1)]
         self.func_code = make_func_code(varnames)
 
     def _update_state_probabilities(self):
@@ -169,23 +169,23 @@ class TrueLabel(object):
         self.state_probabilities = cprobs / pnorm
 
     def set_probabilities(self, probabilities):
-        if len(probabilities) == self.cardinality:
+        if len(probabilities) == self.rank:
             self.independent_probabilities = np.array(probabilities)[:-1]
-        elif len(probabilities) == self.cardinality - 1:
+        elif len(probabilities) == self.rank - 1:
             self.independent_probabilities = np.array(probabilities)
         self._update_state_probabilities()
 
     def __call__(self, *args):
         # does not take X only parameters, b/c independent of X
-        if len(args) == self.cardinality - 1:
-            self.independent_probabilities = np.array(args[0: self.cardinality - 1])
+        if len(args) == self.rank - 1:
+            self.independent_probabilities = np.array(args[0: self.rank - 1])
             self._update_state_probabilities()
         elif len(args) == 1:
             iprobs = args[0]
             if isinstance(iprobs, (list, tuple, np.ndarray)):
                 self.independent_probabilities = np.array(iprobs).ravel()
-                if len(self.independent_probabilities) != self.cardinality - 1:
-                    raise ValueError(f'independent probabilities does not have {self.cardinality - 1} entries')
+                if len(self.independent_probabilities) != self.rank - 1:
+                    raise ValueError(f'independent probabilities does not have {self.rank - 1} entries')
             self._update_state_probabilities()
 
         # return all state probabilities
@@ -194,7 +194,7 @@ class TrueLabel(object):
     def sample(self, size=1, seed=None):
         if seed is not None:
             np.random.seed(seed)
-        states = range(self.cardinality)
+        states = range(self.rank)
         return np.random.choice(states, size=size, p=self.state_probabilities)
 
 
@@ -211,15 +211,15 @@ class BayesianModel(object):
         if len(self.indices) != len(u_indices):
             raise RuntimeError('overlapping indices between nodes. nodes are not independent.')
 
-        cardinalities = [node.cardinality for node in nodes]
-        self.cardinality = cardinalities[0]
-        if not cardinalities.count(self.cardinality) == len(cardinalities):
-            raise RuntimeError('nodes and true_label should all have the same cardinality')
-        self.classes = np.array(list(range(self.cardinality)))
+        ranks = [node.rank for node in nodes]
+        self.rank = ranks[0]
+        if not ranks.count(self.rank) == len(ranks):
+            raise RuntimeError('nodes and true_label should all have the same rank')
+        self.classes = np.array(list(range(self.rank)))
         self.nodes = nodes
 
         # define true label (class imbalance parameters)
-        self.true_label = TrueLabel(self.cardinality, prefix)
+        self.true_label = TrueLabel(self.rank, prefix)
 
         # set function code
         arg = tuple(nodes) + (self.true_label, )
@@ -244,7 +244,7 @@ class BayesianModel(object):
             raise AssertionError('wrong number of arguments')
 
         # multiply probabilities all weak labels and the underlying true state
-        yprobs = np.ones(self.cardinality)
+        yprobs = np.ones(self.rank)
         for i in range(self.numf):
             thispos = self.allpos[i]
             if self.arglen == len(arg):
