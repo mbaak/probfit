@@ -54,6 +54,13 @@ class Node(object):
         self.func_code = make_func_code(varnames)
         self.func_defaults = None
 
+    def set_probabilities(self, probabilities):
+        if len(probabilities) == self.n_independent:
+            self.independent_probabilities = np.array(probabilities).ravel()
+        elif probabilities.shape == self.conditional_probabilities.shape:
+            self.independent_probabilities = probabilities[:-1]
+        self._update_conditional_probabilities()
+
     def _update_conditional_probabilities(self):
         """Normalize the conditional probabilities
         """
@@ -79,7 +86,8 @@ class Node(object):
         X = args[0]
         X = np.array([X] if not isinstance(X, (list, tuple, np.ndarray)) else X)
         x = X[:, self.indices if len(self.indices) > 1 else self.indices[0]] if X.ndim > 1 else X
-        x_vec = vec_translate(x, self.mapping)
+        x_vec = vec_translate(x, self.mapping) if x.ndim == 1 else \
+            np.array([self.mapping[tuple(xi)] for xi in x])
 
         if len(args) == self.n_independent + 1:
             self.independent_probabilities = np.array(args[1: self.n_independent + 1])
@@ -104,21 +112,21 @@ class WeakLabel(Node):
 
 
 class CompoundWeakLabel(Node):
-    def __init__(self, weak_labels, prefix='cwl'):
-        if len(weak_labels) == 0 or not all([isinstance(wl, Node) for wl in weak_labels]):
+    def __init__(self, nodes, prefix='cwl'):
+        if len(nodes) == 0 or not all([isinstance(node, Node) for node in nodes]):
             raise TypeError('weak labels should be filled list of WeakLabels')
 
-        cardinalities = [wl.cardinality for wl in weak_labels]
+        cardinalities = [node.cardinality for node in nodes]
         if not cardinalities.count(cardinalities[0]) == len(cardinalities):
             raise RuntimeError('weak labels should have the same cardinality')
 
-        indices = np.concatenate([wl.indices for wl in weak_labels])
+        indices = np.concatenate([node.indices for node in nodes])
 
         def outer(A, B):
             return [tuplize(x) + tuplize(y) for y in B for x in A]
         states = [None]
-        for wl in weak_labels:
-            states = outer(states, wl.states)
+        for node in nodes:
+            states = outer(states, node.states)
 
         super(CompoundWeakLabel, self).__init__(indices, states, cardinalities[0], prefix)
 
@@ -160,10 +168,10 @@ class TrueLabel(object):
             raise RuntimeError('state probabilities cannot be normalized')
         self.state_probabilities = cprobs / pnorm
 
-    def set_state_probabilities(self, probabilities):
-        if len(state_probabilities) == self.cardinality:
+    def set_probabilities(self, probabilities):
+        if len(probabilities) == self.cardinality:
             self.independent_probabilities = np.array(probabilities)[:-1]
-        elif len(state_probabilities) == self.cardinality - 1:
+        elif len(probabilities) == self.cardinality - 1:
             self.independent_probabilities = np.array(probabilities)
         self._update_state_probabilities()
 
@@ -191,30 +199,30 @@ class TrueLabel(object):
 
 
 class BayesianModel(object):
-    def __init__(self, weak_labels, prefix="pY"):
+    def __init__(self, nodes, prefix="pY"):
         # basic checks on inputs
         if not isinstance(prefix, str) or len(prefix) == 0:
             raise ValueError('prefix should be a filled string')
-        if len(weak_labels) == 0 or not all([isinstance(c, Node) for c in weak_labels]):
-            raise TypeError('weak_labels attribute should be filled list of weak_labels')
+        if len(nodes) == 0 or not all([isinstance(c, Node) for c in nodes]):
+            raise TypeError('nodes attribute should be filled list of nodes')
 
-        self.indices = np.concatenate([c.indices for c in weak_labels])
+        self.indices = np.concatenate([c.indices for c in nodes])
         u_indices = np.unique(self.indices)
         if len(self.indices) != len(u_indices):
-            raise RuntimeError('overlapping indices between weak_labels. weak_labels are not independent.')
+            raise RuntimeError('overlapping indices between nodes. nodes are not independent.')
 
-        cardinalities = [wl.cardinality for wl in weak_labels]
+        cardinalities = [node.cardinality for node in nodes]
         self.cardinality = cardinalities[0]
         if not cardinalities.count(self.cardinality) == len(cardinalities):
-            raise RuntimeError('weak_labels and true_label should all have the same cardinality')
+            raise RuntimeError('nodes and true_label should all have the same cardinality')
         self.classes = np.array(list(range(self.cardinality)))
-        self.nodes = weak_labels
+        self.nodes = nodes
 
         # define true label (class imbalance parameters)
         self.true_label = TrueLabel(self.cardinality, prefix)
 
         # set function code
-        arg = tuple(weak_labels) + (self.true_label, )
+        arg = tuple(nodes) + (self.true_label, )
         self.func_code, allpos = merge_func_code(*arg)
 
         # store functions & caching
@@ -226,6 +234,9 @@ class BayesianModel(object):
 
     def __call__(self, *arg):
         return self.probability(*arg)
+
+    def set_probabilities(self, probabilities):
+        self.true_label.set_probabilities(probabilities)
 
     def _eval(self, *arg):
         # probabilities of the true label states
@@ -335,23 +346,26 @@ class BayesianModel(object):
         if seed is not None:
             np.random.seed(seed)
 
-        true_indices = [self.true_label.prefix] if include_true_label else []
-        all_indices = np.concatenate([self.indices, true_indices])
+        n_col = np.max(self.indices) + 1
+        n_col += 1 if include_true_label else 0
+        X = np.zeros(shape=(size, n_col), dtype=int)
 
-        types = [(var_name, "int") for var_name in all_indices]
-        X = np.zeros(size, dtype=types).view(np.recarray)
-
+        # generate true labels
         Y = self.true_label.sample(size=size)
+        y, counts = np.unique(Y, return_counts=True, axis=0)
         if include_true_label:
-            X[true_indices] = Y
-        unique_y, counts = np.unique(Y, return_counts=True, axis=0)
+            X[:, -1] = Y
 
+        # generate weak labels, one by one.
         for node in self.nodes:
-            samples = np.zeros(size, dtype=int)
-            for i, sizey in enumerate(counts):
-                samples[(Y == unique_y[i]).all(axis=1)] = \
-                    np.random.choice(node.states, size=sizey, p=unique_y[i])
-            X[node.indices] = samples
+            shape = (size, len(node.indices)) if len(node.indices) > 1 else (size, )
+            samples = np.empty(shape=shape, dtype=int)
+            states = range(node.n_states)
+            for i, size_y in enumerate(counts):
+                # choice does not seems to work with states of shape 2
+                s = np.random.choice(states, size=size_y, p=node.conditional_probabilities[:, y[i]])
+                samples[(Y == y[i])] = np.array(node.states)[s]
+            X[:, node.indices if len(node.indices) > 1 else node.indices[0]] = samples
         return X
 
 
@@ -393,15 +407,16 @@ class BinnedLH(object):
 
     def __call__(self, *arg):
         if self.arglen != len(arg):
-            raise AssertionError('wrong number of arguments')
+            raise RuntimeError('wrong number of arguments')
 
         x_arg = (self.data.bin_x, ) + arg
         probs = self.bm(*x_arg)
 
+        n_observed = self.data.n_samples
         # predicted number of entries per bin, for all filled bins
-        f = self.data.n_samples * probs
+        f = n_observed * probs
         # predicted number of entries for bins with zero entries
-        f_zero = self.data.n_samples * (1. - np.sum(probs))
+        f_zero = np.max(n_observed * (1. - np.sum(probs)), 0)
 
         # observed number of entries
         y = self.data.bin_entries
@@ -409,5 +424,5 @@ class BinnedLH(object):
         # Poisson binned likelihood for filled bins
         nll = f - special.xlogy(y, f) + special.gammaln(y + 1)
 
-        # likelihood sum of filled and unfilled bins
+        # likelihood sum of filled and zero bins
         return np.sum(nll) + f_zero
