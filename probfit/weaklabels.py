@@ -235,7 +235,7 @@ class BayesianModel(object):
     def __call__(self, *arg):
         return self.probability(*arg)
 
-    def set_probabilities(self, probabilities):
+    def set_class_balances(self, probabilities):
         self.true_label.set_probabilities(probabilities)
 
     def _eval(self, *arg):
