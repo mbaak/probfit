@@ -429,3 +429,33 @@ class BinnedLH(object):
 
         # likelihood sum of filled and zero bins
         return np.sum(nll) + f_zero
+
+    def gtest(self):
+        # total number of entries
+        n_observed = self.data.n_samples
+
+        # predicted number of entries per bin, for all filled bins
+        x = self.data.bin_x
+        probs = self.bm(x)
+        f = n_observed * probs
+
+        # observed number of entries per bin
+        y = self.data.bin_entries
+
+        g_test = 2. * y * np.log(y / f)
+        return np.sum(g_test)
+
+    def chi2(self):
+        # total number of entries
+        n_observed = self.data.n_samples
+
+        # predicted number of entries per bin, for all filled bins
+        x = self.data.bin_x
+        probs = self.bm(x)
+        f = n_observed * probs
+
+        # observed number of entries per bin
+        y = self.data.bin_entries
+
+        chi2 = (y - f) ** 2 / f
+        return np.sum(chi2)
