@@ -1,4 +1,4 @@
-from typing import Union, Type, Tuple, List, Sequence, Any
+from typing import Union, Type, Tuple, List, Sequence, Any, Optional
 
 import numpy as np
 from iminuit.util import make_func_code, describe
