@@ -1,39 +1,49 @@
+from typing import Union, Type, Tuple, List, Sequence, Any
+
 import numpy as np
 from iminuit.util import make_func_code, describe
+from scipy import special
+
 from .funcutil import merge_func_code
 from .functor import construct_arg
-from scipy import special
 
 
 def vec_translate(a, my_dict):
     return np.vectorize(my_dict.__getitem__)(a)
 
 
-def tuplize(x):
-    return tuple(x) if isinstance(x, (list, tuple, np.ndarray)) else tuple([] if x is None else [x])
+def tuplize(x: Any):
+    return tuple(x if isinstance(x, (list, tuple, np.ndarray)) else [] if x is None else [x])
 
 
-class Node(object):
-    def __init__(self, indices, states, rank, prefix='wl'):
+class Node:
+    def __init__(
+        self, 
+        indices: Union[List, Tuple, np.ndarray], 
+        states: Union[List, Tuple, np.ndarray, int],
+        rank: int, 
+        prefix: str ='wl'
+    ):
         """
 
         :param indices:
         """
         # basic checks on inputs
-        if not isinstance(prefix, str) or len(prefix) == 0:
+        if len(prefix) == 0:
             raise ValueError('prefix should be a filled string')
-        if not isinstance(rank, int) or rank < 0:
+        if rank < 0:
             raise ValueError('rank should be a positive integer')
+
         if isinstance(states, int) and states > 0:
             states = list(range(states))
-        if not isinstance(states, (list, tuple, np.ndarray)) or len(states) == 0:
-            raise ValueError('states should be a filled list')
         else:
             states = list(states)
-        if not isinstance(indices, (list, tuple, np.ndarray)) or len(indices) == 0 or any([idx < 0 for idx in indices]):
+        if len(states) == 0:
+            raise ValueError('states should be a filled list')
+
+        indices = np.array(indices)
+        if len(indices) == 0 or any([idx < 0 for idx in indices]):
             raise ValueError('indices should be a filled list of indices')
-        else:
-            indices = np.array(indices)
 
         self.prefix = prefix
         self.indices = indices
@@ -105,39 +115,46 @@ class Node(object):
 
 
 class WeakLabel(Node):
-    def __init__(self, index, states, rank, prefix='wl'):
-        if not isinstance(index, int) or index < 0:
+    def __init__(self, index: int, states, rank, prefix='wl'):
+        if index < 0:
             raise ValueError('index should be a positive integer')
-        super(WeakLabel, self).__init__([index], states, rank, prefix)
+        super().__init__([index], states, rank, prefix)
+
+    def __repr__(self):
+        return f"WeakLabel(name={self.name})"
 
 
 class CompoundWeakLabel(Node):
-    def __init__(self, nodes, prefix='cwl'):
-        if len(nodes) == 0 or not all([isinstance(node, Node) for node in nodes]):
-            raise TypeError('weak labels should be filled list of WeakLabels')
+    def __init__(self, nodes: Sequence[Type[Node]], prefix='cwl'):
+        if len(nodes) == 0:
+            raise ValueError('weak labels should be filled list of WeakLabels')
 
         ranks = [node.rank for node in nodes]
         if not ranks.count(ranks[0]) == len(ranks):
-            raise RuntimeError('weak labels should have the same rank')
+            raise ValueError('weak labels should have the same rank')
 
         indices = np.concatenate([node.indices for node in nodes])
 
         def outer(A, B):
             return [tuplize(x) + tuplize(y) for y in B for x in A]
+
         states = [None]
         for node in nodes:
             states = outer(states, node.states)
 
-        super(CompoundWeakLabel, self).__init__(indices, states, ranks[0], prefix)
+        super().__init__(indices, states, ranks[0], prefix)
+
+    def __repr__(self):
+        return f"CompoundWeakLabel(name={self.name}, indices={self.indices})"
 
 
-class TrueLabel(object):
-    def __init__(self, rank, prefix='pY'):
+class TrueLabel:
+    def __init__(self, rank: int, prefix: str = 'pY'):
         # basic checks on inputs
-        if not isinstance(prefix, str) or len(prefix) == 0:
+        if len(prefix) == 0:
             raise ValueError('prefix should be a filled string')
         self.prefix = prefix
-        if not isinstance(rank, int) or rank < 0:
+        if rank < 0:
             raise ValueError('rank should be a positive integer')
         self.rank = rank
 
@@ -165,7 +182,7 @@ class TrueLabel(object):
         # normalize sum to 1
         pnorm = cprobs.sum()
         if pnorm <= 0:
-            raise RuntimeError('state probabilities cannot be normalized')
+            raise ValueError('state probabilities cannot be normalized')
         self.state_probabilities = cprobs / pnorm
 
     def set_probabilities(self, probabilities):
@@ -198,23 +215,24 @@ class TrueLabel(object):
         return np.random.choice(states, size=size, p=self.state_probabilities)
 
 
-class BayesianModel(object):
-    def __init__(self, nodes, prefix="pY"):
+class BayesianModel:
+    def __init__(self, nodes: Sequence[Type[Node]], prefix: str = "pY"):
         # basic checks on inputs
-        if not isinstance(prefix, str) or len(prefix) == 0:
+        if len(prefix) == 0:
             raise ValueError('prefix should be a filled string')
-        if len(nodes) == 0 or not all([isinstance(c, Node) for c in nodes]):
-            raise TypeError('nodes attribute should be filled list of nodes')
+
+        if len(nodes) == 0:
+            raise ValueError('nodes attribute should be filled list of nodes')
 
         self.indices = np.concatenate([c.indices for c in nodes])
         u_indices = np.unique(self.indices)
         if len(self.indices) != len(u_indices):
-            raise RuntimeError('overlapping indices between nodes. nodes are not independent.')
+            raise ValueError('overlapping indices between nodes. nodes are not independent.')
 
         ranks = [node.rank for node in nodes]
         self.rank = ranks[0]
         if not ranks.count(self.rank) == len(ranks):
-            raise RuntimeError('nodes and true_label should all have the same rank')
+            raise ValueError('nodes and true_label should all have the same rank')
         self.classes = np.array(list(range(self.rank)))
         self.nodes = nodes
 
@@ -232,6 +250,9 @@ class BayesianModel(object):
         self.arglen = self.func_code.co_argcount
         self.min_pdf_value = 1e-300
 
+    def __repr__(self):
+        return f"BayesianModel(nodes=[{', '.join([str(x) for x in self.nodes])}])"
+
     def __call__(self, *arg):
         return self.probability(*arg)
 
@@ -241,7 +262,7 @@ class BayesianModel(object):
     def _eval(self, *arg):
         # probabilities of the true label states
         if self.arglen != len(arg) and len(arg) != 1:
-            raise AssertionError('wrong number of arguments')
+            raise ValueError('wrong number of arguments')
 
         # multiply probabilities all weak labels and the underlying true state
         yprobs = np.ones(self.rank)
@@ -369,15 +390,15 @@ class BayesianModel(object):
         return X
 
 
-class BinnedLabels(object):
-    def __init__(self, X, select_indices=None):
+class BinnedLabels:
+    def __init__(self, X: Union[List, Tuple, np.ndarray], select_indices: Optional[Union[List, Tuple, np.ndarray]] = None):
         """"""
         # basic checks on inputs
-        if not isinstance(X, (list, tuple, np.ndarray)):
-            raise TypeError('X should be a filled numpy array')
+        if len(X) == 0:
+            raise ValueError('X should be a filled numpy array')
         X = np.array(X)
 
-        if isinstance(select_indices, (list, tuple, np.ndarray)):
+        if select_indices is not None:
             select_indices = np.array(select_indices)
             if len(select_indices) == 0 or any([idx < 0 for idx in select_indices]):
                 raise ValueError('select_indices should be a filled list of valid indices')
@@ -391,11 +412,8 @@ class BinnedLabels(object):
         self.data = dict(zip([tuple(x) for x in self.bin_x], self.bin_entries))
 
 
-class BinnedLH(object):
-    def __init__(self, binned_data, bayes_model):
-        assert isinstance(binned_data, BinnedLabels)
-        assert isinstance(bayes_model, BayesianModel)
-
+class BinnedLH:
+    def __init__(self, binned_data: BinnedLabels, bayes_model: BayesianModel):
         self.data = binned_data
         self.bm = bayes_model
 
@@ -410,7 +428,7 @@ class BinnedLH(object):
 
     def __call__(self, *arg):
         if self.arglen != len(arg):
-            raise RuntimeError('wrong number of arguments')
+            raise ValueError('wrong number of arguments')
 
         x_arg = (self.data.bin_x, ) + arg
         probs = self.bm(*x_arg)
@@ -430,7 +448,7 @@ class BinnedLH(object):
         # likelihood sum of filled and zero bins
         return np.sum(nll) + f_zero
 
-    def gtest(self):
+    def _test_stats(self):
         # total number of entries
         n_observed = self.data.n_samples
 
@@ -441,21 +459,19 @@ class BinnedLH(object):
 
         # observed number of entries per bin
         y = self.data.bin_entries
+        return f, y
 
+    def gtest(self):
+        f, y = self._test_stats()
         g_test = 2. * y * np.log(y / f)
         return np.sum(g_test)
 
     def chi2(self):
-        # total number of entries
-        n_observed = self.data.n_samples
-
-        # predicted number of entries per bin, for all filled bins
-        x = self.data.bin_x
-        probs = self.bm(x)
-        f = n_observed * probs
-
-        # observed number of entries per bin
-        y = self.data.bin_entries
-
+        f, y = self._test_stats()
         chi2 = (y - f) ** 2 / f
         return np.sum(chi2)
+
+    def psi(self):
+        f, y = self._test_stats()
+        psi = y * np.log10(y / f)
+        return 10 * np.sum(psi)
